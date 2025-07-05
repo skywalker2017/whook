@@ -1210,7 +1210,10 @@ class account_c:
                 side = 'buy' if order.side == 'close_buy' else 'sell'
                 params['marginMode'] = self.MARGIN_MODE
                 print( " * Closing position:", order.symbol, side, params )
-                self.exchange.close_position( order.symbol, side, params )
+                try:
+                    self.exchange.close_position( order.symbol, side, params )
+                except Exception as e:
+                    self.print( ' * E: close_position:', e.args[0], type(e) )
                 self.ordersQueue.remove( order )
                 continue
             if( self.activeOrderForSymbol(order.symbol) ):
