@@ -608,9 +608,13 @@ class account_c:
                 params['leverage'] = leverage
             elif( self.exchange.id == 'okx' ):
                 params['lever'] = leverage
+                response = self.exchange.set_margin_mode( self.MARGIN_MODE, symbol, params = {'posSide':'short', 'lever':leverage} )
+                response2 = self.exchange.set_margin_mode( self.MARGIN_MODE, symbol, params = {'posSide':'long', 'lever':leverage} )
 
             try:
+                print( " * I: updateSymbolLeverage->set_margin_mode:", self.exchange.id, symbol, self.MARGIN_MODE, params )
                 response = self.exchange.set_margin_mode( self.MARGIN_MODE, symbol, params )
+                print( " * I: updateSymbolLeverage->set_margin_mode: response", response )
 
             except ccxt.NoChange as e:
                 self.markets[ symbol ]['local']['marginMode'] = self.MARGIN_MODE
@@ -634,6 +638,7 @@ class account_c:
                         # * E: UpdateOrdersQueue: Unhandled exception. Cancelling: bitget {"code":"45117","msg":"Currently holding positions or orders, the margin mode cannot be adjusted","requestTime":1734896201207,"data":null} <class 'ccxt.base.errors.ExchangeError'>
                     else:
                         print( " * E: updateSymbolLeverage->set_margin_mode:", a, type(e) )
+                        self.markets[ symbol ]['local']['marginMode'] = self.MARGIN_MODE
             else:
 
                 # was everything correct, tho?
@@ -672,8 +677,11 @@ class account_c:
             if( self.exchange.id == 'coinex' ): # coinex always updates leverage and marginMode at the same time
                 params['marginMode'] = self.markets[ symbol ]['local']['marginMode'] # use current marginMode to avoid triggering an error
             elif( self.exchange.id == 'okx' ):
-                params['marginMode'] = self.markets[ symbol ]['local']['marginMode']
-                params['posSide'] = 'net'
+                marginMode = self.markets[ symbol ]['local']['marginMode']
+                response = self.exchange.set_leverage( leverage, symbol, params = {'posSide':'long', 'marginMode':marginMode} )
+                response2 = self.exchange.set_leverage( leverage, symbol, params = {'posSide':'short', 'marginMode':marginMode} )
+                self.markets[ symbol ]['local']['leverage'] = leverage
+                return
             elif( self.exchange.id == 'bingx' ):
                 if( self.markets[ symbol ]['local']['positionMode'] != 'oneway' ):
                     response = self.exchange.set_leverage( leverage, symbol, params = {'side':'LONG'} )
@@ -685,7 +693,9 @@ class account_c:
                     params['side'] = 'BOTH'
 
             try:
+                print( " * I: updateSymbolLeverage->set_leverage:", self.exchange.id, symbol, leverage, params )
                 response = self.exchange.set_leverage( leverage, symbol, params )
+
             except ccxt.NoChange as e:
                 self.markets[ symbol ]['local']['leverage'] = leverage
             except Exception as e:
@@ -1195,6 +1205,14 @@ class account_c:
         
         # go through the queue activating every symbol that doesn't have an active order
         for order in self.ordersQueue:
+            params = {}
+            if( order.side == 'close_buy' or order.side == 'close_sell' ):
+                side = 'buy' if order.side == 'close_buy' else 'sell'
+                params['marginMode'] = self.MARGIN_MODE
+                print( " * Closing position:", order.symbol, side, params )
+                self.exchange.close_position( order.symbol, side, params )
+                self.ordersQueue.remove( order )
+                continue
             if( self.activeOrderForSymbol(order.symbol) ):
                 continue
 
@@ -1207,7 +1225,7 @@ class account_c:
                 continue
 
             # disable hedge mode if present
-            self.updateSymbolPositionMode( order.symbol )
+            #self.updateSymbolPositionMode( order.symbol )
 
             # see if the leverage in the server needs to be changed and set marginMode
             if not debug_order:
@@ -1241,6 +1259,7 @@ class account_c:
             if( self.exchange.id == 'okx' ):
                 params['leverage'] = max( order.leverage, 1 )
                 params['marginMode'] = self.MARGIN_MODE
+                params['posSide'] = 'long' if order.side == 'buy' else 'short'
 
             if( self.exchange.id == 'bingx' ):
                 if( self.markets[ order.symbol ]['local']['positionMode'] == 'oneway' ):
@@ -1270,6 +1289,7 @@ class account_c:
 
             # send the actual order
             try:
+                print( " * I: create_order:", order.symbol, order.type, order.side, order.quantity, order.price, params )
                 response = self.exchange.create_order( order.symbol, order.type, order.side, order.quantity, order.price, params )
                 #pprint( response )
 
@@ -1610,7 +1630,11 @@ class account_c:
                     }
                     self.latchedAlerts.append( alert )
                     leverage = self.markets[ symbol ]['local']['leverage'] # reduce the position with current leverage
-            # fall through
+            # fall through‘
+
+        if (command == 'close_buy' or command == 'close_sell'):
+            print( " * Closing position:", symbol, command, quantity, leverage )
+            self.ordersQueue.append( order_c( symbol, command, quantity, leverage, 1.0 ) )
 
 
         if( command == 'buy' or command == 'sell'):
@@ -1841,6 +1865,10 @@ def parseAlert( data, account: account_c ):
             alert['command'] = 'sell'
         elif token.lower()  == 'close':
             alert['command'] = 'close'
+        elif token.lower() == "close_buy":
+            alert['command'] = 'close_buy'
+        elif token.lower() == "close_sell":
+            alert['command'] = 'close_sell'
         elif token.lower()  == 'position' or token.lower()  == 'pos':
             alert['command'] = 'position'
         elif token.lower()  == 'changeleverage':
